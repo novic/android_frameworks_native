@@ -1,0 +1,48 @@
+From e832d5552d7640319461d79f6838b094e6455054 Mon Sep 17 00:00:00 2001
+From: Dan Austin <danielaustin@google.com>
+Date: Thu, 10 Sep 2015 13:46:02 -0700
+Subject: [PATCH] Benign unsigned integer overflow in Parcel
+
+The realloc case in continueWrite did not update the
+gParcelGlobalAllocCount value when an allocation occurred.
+
+In addition, there are conditions that could cause the
+gParcelGlobalAllocCount value to be decremented below 0, resulting
+in a benign unsigned integer overflow that can cause corrupted values
+to be returned through system profiling mechanisms.
+
+BUG: 23972600
+Change-Id: Ibe07db91a811a04b486760eb78d81c926ba8503d
+---
+ libs/binder/Parcel.cpp | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/libs/binder/Parcel.cpp b/libs/binder/Parcel.cpp
+index 4a660d1..8f19a24 100644
+--- a/libs/binder/Parcel.cpp
++++ b/libs/binder/Parcel.cpp
+@@ -1677,8 +1677,14 @@ void Parcel::freeDataNoInit()
+         if (mData) {
+             LOG_ALLOC("Parcel %p: freeing with %zu capacity", this, mDataCapacity);
+             pthread_mutex_lock(&gParcelGlobalAllocSizeLock);
+-            gParcelGlobalAllocSize -= mDataCapacity;
+-            gParcelGlobalAllocCount--;
++            if (mDataCapacity <= gParcelGlobalAllocSize) {
++              gParcelGlobalAllocSize = gParcelGlobalAllocSize - mDataCapacity;
++            } else {
++              gParcelGlobalAllocSize = 0;
++            }
++            if (gParcelGlobalAllocCount > 0) {
++              gParcelGlobalAllocCount--;
++            }
+             pthread_mutex_unlock(&gParcelGlobalAllocSizeLock);
+             free(mData);
+         }
+@@ -1857,6 +1863,7 @@ status_t Parcel::continueWrite(size_t desired)
+                 pthread_mutex_lock(&gParcelGlobalAllocSizeLock);
+                 gParcelGlobalAllocSize += desired;
+                 gParcelGlobalAllocSize -= mDataCapacity;
++                gParcelGlobalAllocCount++;
+                 pthread_mutex_unlock(&gParcelGlobalAllocSizeLock);
+                 mData = data;
+                 mDataCapacity = desired;
